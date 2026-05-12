@@ -21,12 +21,22 @@ import {
 } from "lucide-react";
 
 // Circular Progress Component
-const CircularProgress = ({ score, size = 120, strokeWidth = 8 }) => {
+interface CircularProgressProps {
+  score: number;
+  size?: number;
+  strokeWidth?: number;
+}
+
+const CircularProgress = ({
+  score,
+  size = 120,
+  strokeWidth = 8,
+}: CircularProgressProps) => {
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;
   const offset = circumference - (score / 100) * circumference;
 
-  const getScoreColor = (score) => {
+  const getScoreColor = (score: number) => {
     if (score >= 80) return "#10B981"; // Emerald
     if (score >= 60) return "#F59E0B"; // Amber
     if (score >= 40) return "#F97316"; // Orange
@@ -70,7 +80,12 @@ const CircularProgress = ({ score, size = 120, strokeWidth = 8 }) => {
 };
 
 // Category Score Card Component
-const CategoryScoreCard = ({ category, index }) => {
+interface CategoryScoreCardProps {
+  category: Feedback["categoryScores"][number];
+  index: number;
+}
+
+const CategoryScoreCard = ({ category, index }: CategoryScoreCardProps) => {
   return (
     <div className="group backdrop-blur-xl bg-white/5 border border-white/10 rounded-3xl p-8 hover:bg-white/10 transition-all duration-300 hover:scale-[1.02] hover:border-white/20">
       <div className="flex items-start justify-between mb-8">

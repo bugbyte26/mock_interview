@@ -1,12 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { vapi } from "@/lib/vapi.sdk";
 import { createFeedback } from "@/lib/actions/general.action";
+import { generator } from "@/constants";
 //import { createFeedback } from "@/lib/actions/general.action";
 
 enum CallStatus {
@@ -21,6 +23,40 @@ interface SavedMessage {
   content: string;
 }
 
+const assistantIdEnvByType = {
+  interview: "NEXT_PUBLIC_VAPI_INTERVIEW_ASSISTANT_ID",
+} as const;
+
+const replaceWorkflowVariables = (
+  value: unknown,
+  variables: Record<string, string>
+): unknown => {
+  if (typeof value === "string") {
+    return Object.entries(variables).reduce(
+      (currentValue, [key, replacement]) =>
+        currentValue
+          .replaceAll(`{{${key}}}`, replacement)
+          .replaceAll(`{{ ${key} }}`, replacement),
+      value
+    );
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => replaceWorkflowVariables(item, variables));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        replaceWorkflowVariables(item, variables),
+      ])
+    );
+  }
+
+  return value;
+};
+
 const Agent = ({
   userName,
   userId,
@@ -34,6 +70,48 @@ const Agent = ({
   const [messages, setMessages] = useState<SavedMessage[]>([]);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [lastMessage, setLastMessage] = useState<string>("");
+
+  const getCallErrorMessage = useCallback((error: unknown) => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    if (error && typeof error === "object") {
+      const maybeError = error as {
+        message?: string;
+        error?: { message?: string };
+        data?: { error?: { message?: string } };
+      };
+
+      return (
+        maybeError.data?.error?.message ||
+        maybeError.error?.message ||
+        maybeError.message ||
+        "Unknown Vapi call error"
+      );
+    }
+
+    return "Unknown Vapi call error";
+  }, []);
+
+  const formatCallError = useCallback((error: unknown) => {
+    const message = getCallErrorMessage(error);
+
+    try {
+      return JSON.stringify(error) || message;
+    } catch {
+      return message;
+    }
+  }, [getCallErrorMessage]);
+
+  const showCallError = useCallback((error: unknown) => {
+    const message = getCallErrorMessage(error);
+    if (/assistant.*does not exist/i.test(message)) {
+      const assistantEnv = assistantIdEnvByType.interview;
+      toast.error(`Invalid Vapi assistant ID. Update ${assistantEnv}.`);
+      return;
+    }
+
+    toast.error(message || "Unable to start the Vapi call.");
+  }, [getCallErrorMessage, type]);
 
   useEffect(() => {
     const onCallStart = () => {
@@ -61,8 +139,10 @@ const Agent = ({
       setIsSpeaking(false);
     };
 
-    const onError = (error: Error) => {
-      console.log("Error:", error);
+    const onError = (error: unknown) => {
+      console.log("Vapi error:", formatCallError(error), error);
+      showCallError(error);
+      setCallStatus(CallStatus.INACTIVE);
     };
 
     vapi.on("call-start", onCallStart);
@@ -80,12 +160,12 @@ const Agent = ({
       vapi.off("speech-end", onSpeechEnd);
       vapi.off("error", onError);
     };
-  }, []);
+  }, [formatCallError, showCallError]);
 
   //console.log(interviewId, userId, type, messages);
 
   const handleGenerateFeedback = async (messages: SavedMessage[]) => {
-    if (!interviewId && !userId) {
+    if (!interviewId || !userId) {
       console.log("Missing required data");
       router.push("/");
       return;
@@ -112,12 +192,10 @@ const Agent = ({
     }
 
     if (callStatus === CallStatus.FINISHED) {
-      if (callStatus === CallStatus.FINISHED) {
-        if (type === "generate") {
-          router.push("/");
-        } else {
-          handleGenerateFeedback(messages);
-        }
+      if (type === "generate") {
+        router.push("/");
+      } else {
+        handleGenerateFeedback(messages);
       }
     }
   }, [messages, callStatus, router, type, userId]);
@@ -127,18 +205,23 @@ const Agent = ({
       setCallStatus(CallStatus.CONNECTING);
 
       if (type === "generate") {
-        const assistantOverrides = {
-          variableValues: {
-            username: userName,
-            userid: userId,
-          },
+        const userVariables = {
+          username: userName || "User",
+          userid: userId || "",
         };
+        const assistantOverrides = {
+          variableValues: userVariables,
+        };
+        const workflow = replaceWorkflowVariables(
+          generator,
+          userVariables
+        ) as Parameters<typeof vapi.start>[3];
 
         await vapi.start(
           undefined,
           assistantOverrides,
           undefined,
-          "f5f4f614-8a25-4013-b68d-518b443f58b6"
+          workflow
         );
       } else {
         let formattedQuestions = "";
@@ -150,23 +233,28 @@ const Agent = ({
 
         const overrides = {
           variableValues: {
-            username: userName,
+            username: userName || "User",
             questions: formattedQuestions,
           },
         };
 
-        await vapi.start(
-          undefined,
-          overrides,
-          undefined,
-          "25f301cb-a040-4b88-be11-2bc4cf270900"
-        );
+        const assistantId =
+          process.env.NEXT_PUBLIC_VAPI_INTERVIEW_ASSISTANT_ID;
+
+        if (!assistantId) {
+          throw new Error(
+            `Missing ${assistantIdEnvByType.interview}. Add it to .env.local or .env.`
+          );
+        }
+
+        await vapi.start(assistantId, overrides);
       }
 
       console.log("Call started successfully");
       setCallStatus(CallStatus.ACTIVE);
     } catch (error) {
-      console.error("Error starting call:", error);
+      console.error("Error starting call:", formatCallError(error), error);
+      showCallError(error);
       setCallStatus(CallStatus.INACTIVE);
     }
   };

@@ -30,6 +30,7 @@ const page = async () => {
   return (
     <>
       <section className="card-cta">
+        {/* <p>{user.id}</p> */}
         <div className="flex flex-col max-w-lg gap-6">
           <h2>Get interview ready with AI-Powered practice & Feedback</h2>
           <p className="text-lg">
